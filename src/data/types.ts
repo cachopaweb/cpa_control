@@ -72,3 +72,14 @@ export type Invite = {
   link: string;
   expiresAt: string;
 };
+
+export type DashboardMetrics = {
+  dailyProfit: number;
+  weeklyProfit: number;
+  monthlyProfit: number;
+  totalDeposit: number;
+  totalReturn: number;
+  roi: number;
+  activeHouses: number;
+  activeOperations: number;
+};

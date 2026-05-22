@@ -74,10 +74,22 @@ service cloud.firestore {
 
     match /invites/{inviteId} {
       allow read: if isController() && sameOrgResource();
+      allow get: if signedIn()
+          && resource.data.status == 'pending'
+          && resource.data.email == request.auth.token.email;
       allow create: if isController()
         && sameOrgRequest()
         && request.resource.data.status == 'pending';
-      allow update: if isController() && sameOrgResource() && sameOrgRequest();
+      allow update: if (isController() && sameOrgResource() && sameOrgRequest()) ||
+        (signedIn()
+          && resource.data.status == 'pending'
+          && resource.data.email == request.auth.token.email
+          && request.resource.data.organizationId == resource.data.organizationId
+          && request.resource.data.email == resource.data.email
+          && request.resource.data.role == resource.data.role
+          && request.resource.data.createdBy == resource.data.createdBy
+          && request.resource.data.status == 'accepted'
+          && request.resource.data.acceptedBy == request.auth.uid);
       allow delete: if false;
     }
 
