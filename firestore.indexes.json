@@ -45,6 +45,14 @@
         { "fieldPath": "status", "order": "ASCENDING" },
         { "fieldPath": "periodEnd", "order": "DESCENDING" }
       ]
+    },
+    {
+      "collectionGroup": "auditLogs",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "organizationId", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "DESCENDING" }
+      ]
     }
   ],
   "fieldOverrides": []

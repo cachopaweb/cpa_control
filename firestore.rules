@@ -42,6 +42,14 @@ service cloud.firestore {
       return sameOrg(request.resource.data.organizationId);
     }
 
+    function validOperationStatus(status) {
+      return status in ['open', 'paused', 'closed'];
+    }
+
+    function validCycleStatus(status) {
+      return status in ['pending', 'under_review', 'won', 'lost', 'canceled'];
+    }
+
     match /organizations/{organizationId} {
       allow read: if sameOrg(organizationId);
       allow create: if signedIn()
@@ -104,9 +112,12 @@ service cloud.firestore {
       allow read: if sameOrgResource()
         && (isController() || resource.data.operatorId == request.auth.uid);
       allow create: if sameOrgRequest()
+        && validOperationStatus(request.resource.data.status)
+        && get(/databases/$(database)/documents/bettingHouses/$(request.resource.data.bettingHouseId)).data.status == 'active'
         && (isController() || request.resource.data.operatorId == request.auth.uid);
       allow update: if sameOrgResource()
         && sameOrgRequest()
+        && validOperationStatus(request.resource.data.status)
         && (isController() || resource.data.operatorId == request.auth.uid);
       allow delete: if false;
     }
@@ -115,9 +126,15 @@ service cloud.firestore {
       allow read: if sameOrgResource()
         && (isController() || resource.data.operatorId == request.auth.uid);
       allow create: if sameOrgRequest()
-        && request.resource.data.operatorId == request.auth.uid;
+        && request.resource.data.operatorId == request.auth.uid
+        && validCycleStatus(request.resource.data.status)
+        && request.resource.data.proofRequired == true
+        && request.resource.data.proofCount > 0
+        && get(/databases/$(database)/documents/operations/$(request.resource.data.operationId)).data.status == 'open';
       allow update: if sameOrgResource()
         && sameOrgRequest()
+        && validCycleStatus(request.resource.data.status)
+        && request.resource.data.proofCount >= resource.data.proofCount
         && (isController() || resource.data.operatorId == request.auth.uid);
       allow delete: if false;
     }
@@ -141,7 +158,9 @@ service cloud.firestore {
 
     match /auditLogs/{auditLogId} {
       allow read: if isController() && sameOrgResource();
-      allow create: if sameOrgRequest();
+      allow create: if sameOrgRequest()
+        && request.resource.data.actorUserId == request.auth.uid
+        && request.resource.data.createdAt == request.time;
       allow update, delete: if false;
     }
   }

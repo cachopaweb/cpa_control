@@ -1,18 +1,48 @@
-import { useState, type FormEvent } from 'react';
-import { Copy, Link2 } from 'lucide-react';
-import type { Invite } from '../../data/types';
-import { operators } from '../../data/mockData';
+import { useMemo, useState, type FormEvent } from 'react';
+import { Copy, Link2, Search, UserCheck, UserX } from 'lucide-react';
+import type { Invite, Operation, UserProfile } from '../../data/types';
 import { MetricCard } from '../../shared/components/MetricCard';
 import { Panel } from '../../shared/components/Panel';
 import { currency, shortDate } from '../../utils/format';
 
-export function OperatorsPage({ invites, onInvite }: { invites: Invite[]; onInvite: (email: string) => void | Promise<void> }) {
+export function OperatorsPage({
+  invites,
+  operators,
+  operations,
+  onInvite,
+  onUpdateOperatorStatus,
+}: {
+  invites: Invite[];
+  operators: UserProfile[];
+  operations: Operation[];
+  onInvite: (email: string) => void | Promise<void>;
+  onUpdateOperatorStatus: (operatorId: string, status: UserProfile['status']) => void | Promise<void>;
+}) {
   const [email, setEmail] = useState('');
-  const ranked = operators.map((operator, index) => ({
-    ...operator,
-    profit: [3147, 2616, 2417, 2389][index],
-    deposits: [403, 700, 365, 355][index],
-  }));
+  const [query, setQuery] = useState('');
+  const [statusFilter, setStatusFilter] = useState<'all' | UserProfile['status']>('all');
+  const summaries = useMemo(() => {
+    const summaryByOperator = new Map<string, { profit: number; deposits: number; cycles: number; open: number }>();
+
+    for (const operation of operations) {
+      const current = summaryByOperator.get(operation.operatorId) ?? { profit: 0, deposits: 0, cycles: 0, open: 0 };
+      current.profit += operation.profitLoss;
+      current.deposits += operation.depositAmount;
+      current.cycles += operation.cycles.length;
+      if (operation.status === 'open') current.open += 1;
+      summaryByOperator.set(operation.operatorId, current);
+    }
+
+    return summaryByOperator;
+  }, [operations]);
+  const filteredOperators = useMemo(() => {
+    const normalizedQuery = query.trim().toLowerCase();
+
+    return operators
+      .filter((operator) => statusFilter === 'all' || operator.status === statusFilter)
+      .filter((operator) => !normalizedQuery || operator.name.toLowerCase().includes(normalizedQuery) || operator.email.toLowerCase().includes(normalizedQuery))
+      .toSorted((a, b) => (summaries.get(b.id)?.profit ?? 0) - (summaries.get(a.id)?.profit ?? 0));
+  }, [operators, query, statusFilter, summaries]);
 
   return (
     <section className="two-column">
@@ -20,23 +50,53 @@ export function OperatorsPage({ invites, onInvite }: { invites: Invite[]; onInvi
         <div className="stats-grid mini">
           <MetricCard label="Operadores" value={String(operators.length)} />
           <MetricCard label="Ativos" value={String(operators.filter((operator) => operator.status === 'active').length)} />
-          <MetricCard label="Lucro equipe" value={currency(32599)} positive />
+          <MetricCard label="Lucro equipe" value={currency(Array.from(summaries.values()).reduce((total, item) => total + item.profit, 0))} positive />
+          <MetricCard label="Ciclos" value={String(Array.from(summaries.values()).reduce((total, item) => total + item.cycles, 0))} />
         </div>
+
+        <div className="toolbar">
+          <label className="search-field">
+            <Search size={16} />
+            <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar operador" />
+          </label>
+          <label className="select-field compact-select">
+            <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as typeof statusFilter)}>
+              <option value="all">Todos</option>
+              <option value="active">Ativos</option>
+              <option value="inactive">Inativos</option>
+            </select>
+          </label>
+        </div>
+
         <div className="operator-list">
-          {ranked.map((operator, index) => (
-            <div className="operator-row" key={operator.id}>
-              <span className="rank-badge">{index + 1}</span>
-              <div className="operator-avatar">{operator.name[0]}</div>
-              <div className="operator-main">
-                <strong>{operator.name}</strong>
-                <span>{operator.deposits} deps · {operator.status === 'active' ? 'ativo' : 'inativo'}</span>
-                <div className="progress-track">
-                  <i style={{ width: `${82 - index * 8}%` }} />
+          {filteredOperators.map((operator, index) => {
+            const summary = summaries.get(operator.id) ?? { profit: 0, deposits: 0, cycles: 0, open: 0 };
+
+            return (
+              <div className="operator-row" key={operator.id}>
+                <span className="rank-badge">{index + 1}</span>
+                <div className="operator-avatar">{operator.name[0]}</div>
+                <div className="operator-main">
+                  <strong>{operator.name}</strong>
+                  <span>
+                    {summary.open} abertas · {summary.cycles} ciclos · {operator.status === 'active' ? 'ativo' : 'inativo'}
+                  </span>
+                  <div className="progress-track">
+                    <i style={{ width: `${Math.min(Math.abs(summary.profit) / 80, 100)}%` }} />
+                  </div>
                 </div>
+                <b>{currency(summary.profit)}</b>
+                <button
+                  className="ghost-button row-action"
+                  onClick={() => void onUpdateOperatorStatus(operator.id, operator.status === 'active' ? 'inactive' : 'active')}
+                  type="button"
+                >
+                  {operator.status === 'active' ? <UserX size={15} /> : <UserCheck size={15} />}
+                  {operator.status === 'active' ? 'Desativar' : 'Ativar'}
+                </button>
               </div>
-              <b>{currency(operator.profit)}</b>
-            </div>
-          ))}
+            );
+          })}
         </div>
       </Panel>
 
@@ -65,9 +125,11 @@ export function OperatorsPage({ invites, onInvite }: { invites: Invite[]; onInvi
             <div className="invite-row" key={invite.id}>
               <div>
                 <strong>{invite.email}</strong>
-                <span>Expira em {shortDate(invite.expiresAt)}</span>
+                <span>
+                  {invite.status} · expira em {shortDate(invite.expiresAt)}
+                </span>
               </div>
-              <button className="ghost-button" onClick={() => navigator.clipboard?.writeText(invite.link)}>
+              <button className="ghost-button" onClick={() => navigator.clipboard?.writeText(invite.link)} type="button">
                 <Copy size={15} />
                 Copiar
               </button>

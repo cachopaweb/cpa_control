@@ -1,4 +1,4 @@
-import type { BettingHouse, Cycle, Goal, Invite, Operation, ThemeMode, UserProfile } from './types';
+import type { AuditLog, BettingHouse, Cycle, Goal, Invite, Operation, ThemeMode, UserProfile } from './types';
 
 const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
@@ -242,6 +242,15 @@ export async function createInviteDocument(profile: UserProfile, invite: Invite)
     acceptedAt: null,
     acceptedBy: null,
   });
+
+  await createAuditLogDocument(profile, {
+    entityType: 'invite',
+    entityId: invite.id,
+    action: 'invite.created',
+    summary: `Convite gerado para ${invite.email}`,
+    beforeData: null,
+    afterData: { email: invite.email, role: invite.role, status: invite.status, expiresAt: invite.expiresAt },
+  });
 }
 
 export async function createGoalDocument(profile: UserProfile, goal: Goal) {
@@ -250,7 +259,7 @@ export async function createGoalDocument(profile: UserProfile, goal: Goal) {
 
   const { db, firestoreModule } = services;
 
-  await firestoreModule.addDoc(firestoreModule.collection(db, 'goals'), {
+  await firestoreModule.setDoc(firestoreModule.doc(db, 'goals', goal.id), {
     organizationId: profile.organizationId,
     title: goal.title,
     scope: goal.scope,
@@ -266,6 +275,15 @@ export async function createGoalDocument(profile: UserProfile, goal: Goal) {
     createdAt: firestoreModule.serverTimestamp(),
     updatedAt: firestoreModule.serverTimestamp(),
   });
+
+  await createAuditLogDocument(profile, {
+    entityType: 'goal',
+    entityId: goal.id,
+    action: 'goal.created',
+    summary: `Meta criada: ${goal.title}`,
+    beforeData: null,
+    afterData: { title: goal.title, metric: goal.metric, targetValue: goal.targetValue, period: goal.period },
+  });
 }
 
 export async function createBettingHouseDocument(profile: UserProfile, house: BettingHouse) {
@@ -274,12 +292,12 @@ export async function createBettingHouseDocument(profile: UserProfile, house: Be
 
   const { db, firestoreModule } = services;
 
-  await firestoreModule.addDoc(firestoreModule.collection(db, 'bettingHouses'), {
+  await firestoreModule.setDoc(firestoreModule.doc(db, 'bettingHouses', house.id), {
     organizationId: profile.organizationId,
     name: house.name,
     website: house.website ?? null,
     logoUrl: null,
-    notes: null,
+    notes: house.notes ?? null,
     status: house.status,
     activeOperations: 0,
     deposit: 0,
@@ -289,6 +307,15 @@ export async function createBettingHouseDocument(profile: UserProfile, house: Be
     createdBy: profile.id,
     createdAt: firestoreModule.serverTimestamp(),
     updatedAt: firestoreModule.serverTimestamp(),
+  });
+
+  await createAuditLogDocument(profile, {
+    entityType: 'betting_house',
+    entityId: house.id,
+    action: 'betting_house.created',
+    summary: `Casa cadastrada: ${house.name}`,
+    beforeData: null,
+    afterData: { name: house.name, website: house.website ?? null, status: house.status },
   });
 }
 
@@ -307,6 +334,8 @@ export async function createOperationDocument(profile: UserProfile, operation: O
     game: operation.game,
     date: operation.date,
     status: operation.status,
+    initialBalance: operation.initialBalance,
+    currentBalance: operation.currentBalance,
     depositAmount: operation.depositAmount,
     withdrawalAmount: operation.withdrawalAmount,
     totalReturn: operation.totalReturn,
@@ -315,6 +344,114 @@ export async function createOperationDocument(profile: UserProfile, operation: O
     proofCount: operation.proofCount,
     createdAt: firestoreModule.serverTimestamp(),
     updatedAt: firestoreModule.serverTimestamp(),
+  });
+
+  await createAuditLogDocument(profile, {
+    entityType: 'operation',
+    entityId: operation.id,
+    action: 'operation.created',
+    summary: `Operacao criada para ${operation.operatorName} na casa ${operation.bettingHouseName}`,
+    beforeData: null,
+    afterData: {
+      operatorId: operation.operatorId,
+      bettingHouseId: operation.bettingHouseId,
+      game: operation.game,
+      date: operation.date,
+      status: operation.status,
+    },
+  });
+}
+
+export async function updateBettingHouseDocument(
+  profile: UserProfile,
+  house: Pick<BettingHouse, 'id' | 'name' | 'website' | 'notes' | 'status'>,
+  beforeData?: BettingHouse,
+) {
+  const services = await getFirebaseServices();
+  if (!services) return;
+
+  const { db, firestoreModule } = services;
+
+  await firestoreModule.updateDoc(firestoreModule.doc(db, 'bettingHouses', house.id), {
+    name: house.name,
+    website: house.website ?? null,
+    notes: house.notes ?? null,
+    status: house.status,
+    updatedAt: firestoreModule.serverTimestamp(),
+  });
+
+  await createAuditLogDocument(profile, {
+    entityType: 'betting_house',
+    entityId: house.id,
+    action: house.status === 'inactive' ? 'betting_house.deactivated' : 'betting_house.updated',
+    summary: `Casa atualizada: ${house.name}`,
+    beforeData: beforeData ? { name: beforeData.name, website: beforeData.website ?? null, notes: beforeData.notes ?? null, status: beforeData.status } : null,
+    afterData: { name: house.name, website: house.website ?? null, notes: house.notes ?? null, status: house.status },
+  });
+}
+
+export async function updateOperatorStatusDocument(profile: UserProfile, operator: UserProfile, status: UserProfile['status']) {
+  const services = await getFirebaseServices();
+  if (!services) return;
+
+  const { db, firestoreModule } = services;
+
+  await firestoreModule.updateDoc(firestoreModule.doc(db, 'users', operator.id), {
+    status,
+    updatedAt: firestoreModule.serverTimestamp(),
+  });
+
+  await createAuditLogDocument(profile, {
+    entityType: 'user',
+    entityId: operator.id,
+    action: status === 'inactive' ? 'operator.deactivated' : 'operator.activated',
+    summary: `${status === 'inactive' ? 'Operador desativado' : 'Operador ativado'}: ${operator.name}`,
+    beforeData: { status: operator.status },
+    afterData: { status },
+  });
+}
+
+export async function updateOperationStatusDocument(profile: UserProfile, operation: Operation, status: Operation['status']) {
+  const services = await getFirebaseServices();
+  if (!services) return;
+
+  const { db, firestoreModule } = services;
+  const nextData = {
+    status,
+    updatedAt: firestoreModule.serverTimestamp(),
+    closedAt: status === 'closed' ? firestoreModule.serverTimestamp() : null,
+  };
+
+  await firestoreModule.updateDoc(firestoreModule.doc(db, 'operations', operation.id), nextData);
+
+  await createAuditLogDocument(profile, {
+    entityType: 'operation',
+    entityId: operation.id,
+    action: `operation.${status}`,
+    summary: `Operacao ${status}: ${operation.bettingHouseName}`,
+    beforeData: { status: operation.status },
+    afterData: { status },
+  });
+}
+
+export async function updateGoalStatusDocument(profile: UserProfile, goal: Goal, status: Goal['status']) {
+  const services = await getFirebaseServices();
+  if (!services) return;
+
+  const { db, firestoreModule } = services;
+
+  await firestoreModule.updateDoc(firestoreModule.doc(db, 'goals', goal.id), {
+    status,
+    updatedAt: firestoreModule.serverTimestamp(),
+  });
+
+  await createAuditLogDocument(profile, {
+    entityType: 'goal',
+    entityId: goal.id,
+    action: `goal.${status}`,
+    summary: `Meta atualizada: ${goal.title}`,
+    beforeData: { status: goal.status },
+    afterData: { status },
   });
 }
 
@@ -347,6 +484,7 @@ export async function createCycleDocument(
   const updatedProfit = operation.profitLoss + cycle.result;
   const updatedRoi = updatedDeposit > 0 ? (updatedProfit / updatedDeposit) * 100 : 0;
   const updatedProofCount = operation.proofCount + (proofFile ? 1 : 0);
+  const updatedCurrentBalance = operation.initialBalance + updatedProfit;
 
   const batch = firestoreModule.writeBatch(db);
 
@@ -364,10 +502,11 @@ export async function createCycleDocument(
     resultAmount: cycle.withdrawal + cycle.bonus,
     profitLoss: cycle.result,
     roi: cycle.roi,
-    status: 'under_review',
+    status: cycle.status,
     proofRequired: true,
     proofCount: proofFile ? 1 : 0,
     proofName,
+    proofUrl,
     createdAt: firestoreModule.serverTimestamp(),
     updatedAt: firestoreModule.serverTimestamp(),
   });
@@ -394,19 +533,63 @@ export async function createCycleDocument(
     totalReturn: updatedReturn,
     profitLoss: updatedProfit,
     roi: updatedRoi,
+    currentBalance: updatedCurrentBalance,
     proofCount: updatedProofCount,
     updatedAt: firestoreModule.serverTimestamp(),
   });
 
   await batch.commit();
+
+  await createAuditLogDocument(profile, {
+    entityType: 'cycle',
+    entityId: cycle.id,
+    action: 'cycle.created',
+    summary: `Ciclo #${cycle.cycleNumber} registrado em ${operation.bettingHouseName}`,
+    beforeData: null,
+    afterData: {
+      operationId: operation.id,
+      deposit: cycle.deposit,
+      withdrawal: cycle.withdrawal,
+      bonus: cycle.bonus,
+      result: cycle.result,
+      roi: cycle.roi,
+      proofName,
+      proofUploaded: Boolean(proofFile),
+    },
+  });
+}
+
+export async function createAuditLogDocument(
+  profile: UserProfile,
+  log: Omit<AuditLog, 'id' | 'organizationId' | 'actorUserId' | 'actorName' | 'createdAt'>,
+) {
+  const services = await getFirebaseServices();
+  if (!services) return;
+
+  const { db, firestoreModule } = services;
+
+  await firestoreModule.addDoc(firestoreModule.collection(db, 'auditLogs'), {
+    organizationId: profile.organizationId,
+    actorUserId: profile.id,
+    actorName: profile.name,
+    entityType: log.entityType,
+    entityId: log.entityId,
+    action: log.action,
+    summary: log.summary,
+    beforeData: log.beforeData ?? null,
+    afterData: log.afterData ?? null,
+    createdAt: firestoreModule.serverTimestamp(),
+  });
 }
 
 export async function subscribeOrganizationLists(
   organizationId: string,
+  onUsers: (users: UserProfile[]) => void,
   onInvites: (invites: Invite[]) => void,
   onGoals: (goals: Goal[]) => void,
   onHouses: (houses: BettingHouse[]) => void,
   onOperations: (operations: Operation[]) => void,
+  onAuditLogs: (auditLogs: AuditLog[]) => void,
 ) {
   const services = await getFirebaseServices();
   if (!services) return () => undefined;
@@ -414,6 +597,10 @@ export async function subscribeOrganizationLists(
   const { db, firestoreModule } = services;
   const invitesQuery = firestoreModule.query(
     firestoreModule.collection(db, 'invites'),
+    firestoreModule.where('organizationId', '==', organizationId),
+  );
+  const usersQuery = firestoreModule.query(
+    firestoreModule.collection(db, 'users'),
     firestoreModule.where('organizationId', '==', organizationId),
   );
   const goalsQuery = firestoreModule.query(
@@ -432,6 +619,11 @@ export async function subscribeOrganizationLists(
     firestoreModule.collection(db, 'cycles'),
     firestoreModule.where('organizationId', '==', organizationId),
   );
+  const auditLogsQuery = firestoreModule.query(
+    firestoreModule.collection(db, 'auditLogs'),
+    firestoreModule.where('organizationId', '==', organizationId),
+    firestoreModule.orderBy('createdAt', 'desc'),
+  );
 
   let operationDocs: Operation[] = [];
   let cycleDocs: Array<Cycle & { operationId: string }> = [];
@@ -449,7 +641,9 @@ export async function subscribeOrganizationLists(
         bonus: cycle.bonus,
         result: cycle.result,
         roi: cycle.roi,
+        status: cycle.status,
         proofName: cycle.proofName,
+        proofUrl: cycle.proofUrl,
       };
 
       if (current) {
@@ -485,6 +679,23 @@ export async function subscribeOrganizationLists(
     );
   });
 
+  const unsubscribeUsers = firestoreModule.onSnapshot(usersQuery, (snapshot) => {
+    onUsers(
+      snapshot.docs.map((userDoc) => {
+        const data = userDoc.data();
+
+        return {
+          id: userDoc.id,
+          organizationId: data.organizationId ?? organizationId,
+          name: data.name ?? 'Usuario',
+          email: data.email ?? '',
+          role: data.role ?? 'operator',
+          status: data.status ?? 'active',
+        };
+      }),
+    );
+  });
+
   const unsubscribeGoals = firestoreModule.onSnapshot(goalsQuery, (snapshot) => {
     onGoals(
       snapshot.docs.map((goalDoc) => {
@@ -498,6 +709,7 @@ export async function subscribeOrganizationLists(
           targetValue: Number(data.targetValue ?? 0),
           currentValue: Number(data.currentValue ?? 0),
           period: data.period ?? 'Período atual',
+          status: data.status ?? 'active',
         };
       }),
     );
@@ -513,6 +725,7 @@ export async function subscribeOrganizationLists(
           organizationId: data.organizationId ?? organizationId,
           name: data.name ?? 'Casa',
           website: data.website ?? undefined,
+          notes: data.notes ?? undefined,
           status: data.status ?? 'active',
           activeOperations: Number(data.activeOperations ?? 0),
           deposit: Number(data.deposit ?? 0),
@@ -538,6 +751,8 @@ export async function subscribeOrganizationLists(
         game: data.game ?? 'Aviator',
         date: data.date ?? new Date().toISOString().slice(0, 10),
         status: data.status ?? 'open',
+        initialBalance: Number(data.initialBalance ?? 0),
+        currentBalance: Number(data.currentBalance ?? data.profitLoss ?? 0),
         depositAmount: Number(data.depositAmount ?? 0),
         withdrawalAmount: Number(data.withdrawalAmount ?? 0),
         totalReturn: Number(data.totalReturn ?? 0),
@@ -563,17 +778,44 @@ export async function subscribeOrganizationLists(
         bonus: Number(data.bonus ?? 0),
         result: Number(data.profitLoss ?? data.result ?? 0),
         roi: Number(data.roi ?? 0),
+        status: data.status ?? 'under_review',
         proofName: data.proofName ?? undefined,
+        proofUrl: data.proofUrl ?? undefined,
       };
     });
     emitOperations();
   });
 
+  const unsubscribeAuditLogs = firestoreModule.onSnapshot(auditLogsQuery, (snapshot) => {
+    onAuditLogs(
+      snapshot.docs.map((logDoc) => {
+        const data = logDoc.data();
+        const createdAt = data.createdAt?.toDate ? data.createdAt.toDate().toISOString() : new Date().toISOString();
+
+        return {
+          id: logDoc.id,
+          organizationId: data.organizationId ?? organizationId,
+          actorUserId: data.actorUserId ?? '',
+          actorName: data.actorName ?? 'Sistema',
+          entityType: data.entityType ?? 'operation',
+          entityId: data.entityId ?? '',
+          action: data.action ?? 'event.created',
+          summary: data.summary ?? 'Evento registrado',
+          createdAt,
+          beforeData: data.beforeData ?? null,
+          afterData: data.afterData ?? null,
+        };
+      }),
+    );
+  });
+
   return () => {
     unsubscribeInvites();
+    unsubscribeUsers();
     unsubscribeGoals();
     unsubscribeHouses();
     unsubscribeOperations();
     unsubscribeCycles();
+    unsubscribeAuditLogs();
   };
 }

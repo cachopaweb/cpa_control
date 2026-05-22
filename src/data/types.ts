@@ -16,6 +16,7 @@ export type BettingHouse = {
   organizationId: string;
   name: string;
   website?: string;
+  notes?: string;
   status: Status;
   activeOperations: number;
   deposit: number;
@@ -34,6 +35,8 @@ export type Operation = {
   game: string;
   date: string;
   status: 'open' | 'paused' | 'closed';
+  initialBalance: number;
+  currentBalance: number;
   depositAmount: number;
   withdrawalAmount: number;
   totalReturn: number;
@@ -51,7 +54,9 @@ export type Cycle = {
   bonus: number;
   result: number;
   roi: number;
+  status: 'pending' | 'under_review' | 'won' | 'lost' | 'canceled';
   proofName?: string;
+  proofUrl?: string;
 };
 
 export type Goal = {
@@ -62,6 +67,7 @@ export type Goal = {
   targetValue: number;
   currentValue: number;
   period: string;
+  status: 'active' | 'completed' | 'missed' | 'canceled';
 };
 
 export type Invite = {
@@ -82,4 +88,20 @@ export type DashboardMetrics = {
   roi: number;
   activeHouses: number;
   activeOperations: number;
+};
+
+export type AuditEntityType = 'invite' | 'betting_house' | 'operation' | 'cycle' | 'proof' | 'goal' | 'user';
+
+export type AuditLog = {
+  id: string;
+  organizationId: string;
+  actorUserId: string;
+  actorName: string;
+  entityType: AuditEntityType;
+  entityId: string;
+  action: string;
+  summary: string;
+  createdAt: string;
+  beforeData?: Record<string, unknown> | null;
+  afterData?: Record<string, unknown> | null;
 };

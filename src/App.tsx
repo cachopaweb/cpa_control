@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import type { Page } from './app/navigation';
-import { resolveTheme } from './app/theme';
-import { currentUser, goals as initialGoals, houses, invites as initialInvites, operations as initialOperations } from './data/mockData';
-import type { BettingHouse, Cycle, DashboardMetrics, Goal, Invite, Operation, ThemeMode, UserProfile } from './data/types';
+import { resolveTheme, subscribeToSystemTheme } from './app/theme';
+import { auditLogs as initialAuditLogs, currentUser, goals as initialGoals, houses, invites as initialInvites, operations as initialOperations, operators as initialOperators } from './data/mockData';
+import type { AuditLog, BettingHouse, Cycle, DashboardMetrics, Goal, Invite, Operation, ThemeMode, UserProfile } from './data/types';
 import {
   acceptInviteWithPassword,
   createBettingHouseDocument,
@@ -17,10 +17,15 @@ import {
   logoutFromFirebase,
   subscribeOrganizationLists,
   subscribeToAuthProfile,
+  updateBettingHouseDocument,
+  updateGoalStatusDocument,
+  updateOperationStatusDocument,
+  updateOperatorStatusDocument,
   type AuthSession,
 } from './data/firebase';
 import { AcceptInviteScreen } from './features/auth/AcceptInviteScreen';
 import { AuthScreen } from './features/auth/AuthScreen';
+import { AuditPage } from './features/audit/AuditPage';
 import { DashboardPage } from './features/dashboard/DashboardPage';
 import { GoalsPage } from './features/goals/GoalsPage';
 import { HousesPage } from './features/houses/HousesPage';
@@ -75,6 +80,8 @@ export function App() {
   const [page, setPage] = useState<Page>('dashboard');
   const [themeMode, setThemeMode] = useState<ThemeMode>(getInitialTheme);
   const [invites, setInvites] = useState<Invite[]>(initialInvites);
+  const [users, setUsers] = useState<UserProfile[]>([currentUser, ...initialOperators]);
+  const [auditLogs, setAuditLogs] = useState<AuditLog[]>(initialAuditLogs);
   const [goals, setGoals] = useState<Goal[]>(initialGoals);
   const [bettingHouses, setBettingHouses] = useState<BettingHouse[]>(houses);
   const [appOperations, setAppOperations] = useState<Operation[]>(initialOperations);
@@ -88,6 +95,14 @@ export function App() {
   useEffect(() => {
     setStoredThemeMode(themeMode);
     document.documentElement.dataset.theme = resolveTheme(themeMode);
+  }, [themeMode]);
+
+  useEffect(() => {
+    if (themeMode !== 'system') return;
+
+    return subscribeToSystemTheme((theme) => {
+      document.documentElement.dataset.theme = theme;
+    });
   }, [themeMode]);
 
   useEffect(() => {
@@ -118,7 +133,7 @@ export function App() {
     let unsubscribe: (() => void) | undefined;
     let active = true;
 
-    void subscribeOrganizationLists(authProfile.organizationId, setInvites, setGoals, setBettingHouses, setAppOperations).then((cleanup) => {
+    void subscribeOrganizationLists(authProfile.organizationId, setUsers, setInvites, setGoals, setBettingHouses, setAppOperations, setAuditLogs).then((cleanup) => {
       if (!active) {
         cleanup();
         return;
@@ -134,10 +149,31 @@ export function App() {
 
   const activeUser = authProfile ?? currentUser;
   const canUseApp = demoMode || Boolean(authSession && authProfile?.status === 'active');
-  const metrics = useMemo(() => calculateMetrics(appOperations, bettingHouses), [appOperations, bettingHouses]);
-  const selectedOperation = appOperations.find((operation) => operation.id === selectedOperationId) ?? appOperations[0];
+  const operators = useMemo(() => users.filter((user) => user.role === 'operator'), [users]);
+  const visibleOperations = useMemo(
+    () => (activeUser.role === 'controller' ? appOperations : appOperations.filter((operation) => operation.operatorId === activeUser.id)),
+    [activeUser.id, activeUser.role, appOperations],
+  );
+  const metrics = useMemo(() => calculateMetrics(visibleOperations, bettingHouses), [visibleOperations, bettingHouses]);
+  const selectedOperation = visibleOperations.find((operation) => operation.id === selectedOperationId) ?? visibleOperations[0];
   const inviteId = useMemo(() => new URLSearchParams(window.location.search).get('invite'), []);
   const isAcceptInviteRoute = window.location.pathname === '/accept-invite';
+
+  function appendLocalAuditLog(log: Omit<AuditLog, 'id' | 'organizationId' | 'actorUserId' | 'actorName' | 'createdAt'>) {
+    if (authProfile && !demoMode) return;
+
+    setAuditLogs((current) => [
+      {
+        id: createLocalId('audit'),
+        organizationId: activeUser.organizationId,
+        actorUserId: activeUser.id,
+        actorName: activeUser.name,
+        createdAt: new Date().toISOString(),
+        ...log,
+      },
+      ...current,
+    ]);
+  }
 
   async function createInvite(email: string) {
     const id = createLocalId('invite');
@@ -152,29 +188,55 @@ export function App() {
 
     if (authProfile && !demoMode) await createInviteDocument(authProfile, invite);
     setInvites((current) => [invite, ...current]);
+    appendLocalAuditLog({
+      entityType: 'invite',
+      entityId: invite.id,
+      action: 'invite.created',
+      summary: `Convite gerado para ${invite.email}`,
+      beforeData: null,
+      afterData: { email: invite.email, role: invite.role, status: invite.status, expiresAt: invite.expiresAt },
+    });
   }
 
-  async function createGoal(title: string, targetValue: number) {
+  async function createGoal(input: Pick<Goal, 'title' | 'targetValue' | 'metric' | 'scope' | 'period'>) {
+    const currentValueByMetric: Record<Goal['metric'], number> = {
+      profit: metrics.monthlyProfit,
+      roi: metrics.roi,
+      deposit: metrics.totalDeposit,
+      return: metrics.totalReturn,
+      cycles: visibleOperations.reduce((total, operation) => total + operation.cycles.length, 0),
+      operations: visibleOperations.length,
+    };
     const goal: Goal = {
       id: createLocalId('goal'),
-      title,
-      scope: 'organization',
-      metric: 'profit',
-      targetValue,
-      currentValue: metrics.monthlyProfit,
-      period: 'Maio/2026',
+      title: input.title,
+      scope: input.scope,
+      metric: input.metric,
+      targetValue: input.targetValue,
+      currentValue: currentValueByMetric[input.metric],
+      period: input.period,
+      status: 'active',
     };
 
     if (authProfile && !demoMode) await createGoalDocument(authProfile, goal);
     setGoals((current) => [goal, ...current]);
+    appendLocalAuditLog({
+      entityType: 'goal',
+      entityId: goal.id,
+      action: 'goal.created',
+      summary: `Meta criada: ${goal.title}`,
+      beforeData: null,
+      afterData: { title: goal.title, targetValue: goal.targetValue, metric: goal.metric, period: goal.period },
+    });
   }
 
-  async function createHouse(name: string, website: string) {
+  async function createHouse(name: string, website: string, notes: string) {
     const house: BettingHouse = {
       id: createLocalId('house'),
       organizationId: activeUser.organizationId,
       name,
       website: website || undefined,
+      notes: notes || undefined,
       status: 'active',
       activeOperations: 0,
       deposit: 0,
@@ -185,11 +247,51 @@ export function App() {
 
     if (authProfile && !demoMode) await createBettingHouseDocument(authProfile, house);
     setBettingHouses((current) => [house, ...current]);
+    appendLocalAuditLog({
+      entityType: 'betting_house',
+      entityId: house.id,
+      action: 'betting_house.created',
+      summary: `Casa cadastrada: ${house.name}`,
+      beforeData: null,
+      afterData: { name: house.name, website: house.website ?? null, status: house.status },
+    });
+  }
+
+  async function updateHouse(house: Pick<BettingHouse, 'id' | 'name' | 'website' | 'notes' | 'status'>) {
+    const currentHouse = bettingHouses.find((item) => item.id === house.id);
+    if (!currentHouse) return;
+
+    if (authProfile && !demoMode) await updateBettingHouseDocument(authProfile, house, currentHouse);
+    setBettingHouses((current) => current.map((item) => (item.id === house.id ? { ...item, ...house } : item)));
+    appendLocalAuditLog({
+      entityType: 'betting_house',
+      entityId: house.id,
+      action: house.status === 'inactive' ? 'betting_house.deactivated' : 'betting_house.updated',
+      summary: `Casa atualizada: ${house.name}`,
+      beforeData: { name: currentHouse.name, website: currentHouse.website ?? null, notes: currentHouse.notes ?? null, status: currentHouse.status },
+      afterData: { name: house.name, website: house.website ?? null, notes: house.notes ?? null, status: house.status },
+    });
+  }
+
+  async function updateOperatorStatus(operatorId: string, status: UserProfile['status']) {
+    const operator = users.find((user) => user.id === operatorId);
+    if (!operator || operator.role !== 'operator') return;
+
+    if (authProfile && !demoMode) await updateOperatorStatusDocument(authProfile, operator, status);
+    setUsers((current) => current.map((user) => (user.id === operatorId ? { ...user, status } : user)));
+    appendLocalAuditLog({
+      entityType: 'user',
+      entityId: operatorId,
+      action: status === 'inactive' ? 'operator.deactivated' : 'operator.activated',
+      summary: `${status === 'inactive' ? 'Operador desativado' : 'Operador ativado'}: ${operator.name}`,
+      beforeData: { status: operator.status },
+      afterData: { status },
+    });
   }
 
   async function createOperation(date: string, houseId: string, game: string) {
     const house = bettingHouses.find((item) => item.id === houseId) ?? bettingHouses[0];
-    if (!house) return;
+    if (!house || house.status !== 'active') return;
 
     const operation: Operation = {
       id: createLocalId('operation'),
@@ -201,6 +303,8 @@ export function App() {
       game,
       date,
       status: 'open',
+      initialBalance: 0,
+      currentBalance: 0,
       depositAmount: 0,
       withdrawalAmount: 0,
       totalReturn: 0,
@@ -213,11 +317,53 @@ export function App() {
     if (authProfile && !demoMode) await createOperationDocument(authProfile, operation);
     setAppOperations((current) => [operation, ...current]);
     setSelectedOperationId(operation.id);
+    appendLocalAuditLog({
+      entityType: 'operation',
+      entityId: operation.id,
+      action: 'operation.created',
+      summary: `Operacao criada para ${operation.operatorName} na casa ${operation.bettingHouseName}`,
+      beforeData: null,
+      afterData: { operatorId: operation.operatorId, bettingHouseId: operation.bettingHouseId, game, date, status: operation.status },
+    });
+  }
+
+  async function updateOperationStatus(operationId: string, status: Operation['status']) {
+    const operation = appOperations.find((item) => item.id === operationId);
+    if (!operation) return;
+
+    if (authProfile && !demoMode) await updateOperationStatusDocument(authProfile, operation, status);
+    setAppOperations((current) => current.map((item) => (item.id === operationId ? { ...item, status } : item)));
+    appendLocalAuditLog({
+      entityType: 'operation',
+      entityId: operationId,
+      action: `operation.${status}`,
+      summary: `Operacao ${status}: ${operation.bettingHouseName}`,
+      beforeData: { status: operation.status },
+      afterData: { status },
+    });
+  }
+
+  async function updateGoalStatus(goalId: string, status: Goal['status']) {
+    const goal = goals.find((item) => item.id === goalId);
+    if (!goal) return;
+
+    if (authProfile && !demoMode) await updateGoalStatusDocument(authProfile, goal, status);
+    setGoals((current) => current.map((item) => (item.id === goalId ? { ...item, status } : item)));
+    appendLocalAuditLog({
+      entityType: 'goal',
+      entityId: goalId,
+      action: `goal.${status}`,
+      summary: `Meta atualizada: ${goal.title}`,
+      beforeData: { status: goal.status },
+      afterData: { status },
+    });
   }
 
   async function addCycle(operationId: string, values: Omit<Cycle, 'id' | 'cycleNumber' | 'roi'>, proofFile?: File | null) {
     const operation = appOperations.find((item) => item.id === operationId);
-    if (!operation) return;
+    if (!operation || operation.status !== 'open') return;
+    if (!proofFile && !values.proofName) return;
+    if (proofFile && (!proofFile.type.startsWith('image/') || proofFile.size > 10 * 1024 * 1024)) return;
 
     const result = values.withdrawal + values.bonus - values.deposit;
     const cycle: Cycle = {
@@ -228,10 +374,27 @@ export function App() {
       bonus: values.bonus,
       result,
       roi: values.deposit > 0 ? (result / values.deposit) * 100 : 0,
+      status: 'under_review',
       proofName: proofFile?.name ?? values.proofName,
     };
 
     if (authProfile && !demoMode) await createCycleDocument(authProfile, operation, cycle, proofFile);
+    appendLocalAuditLog({
+      entityType: 'cycle',
+      entityId: cycle.id,
+      action: 'cycle.created',
+      summary: `Ciclo #${cycle.cycleNumber} registrado em ${operation.bettingHouseName}`,
+      beforeData: null,
+      afterData: {
+        operationId: operation.id,
+        deposit: cycle.deposit,
+        withdrawal: cycle.withdrawal,
+        bonus: cycle.bonus,
+        result: cycle.result,
+        proofName: cycle.proofName ?? null,
+        proofUploaded: Boolean(proofFile),
+      },
+    });
 
     setAppOperations((current) =>
       current.map((item) => {
@@ -241,6 +404,7 @@ export function App() {
         const withdrawalAmount = item.withdrawalAmount + cycle.withdrawal;
         const totalReturn = item.totalReturn + cycle.withdrawal + cycle.bonus;
         const profitLoss = item.profitLoss + cycle.result;
+        const currentBalance = item.initialBalance + profitLoss;
 
         return {
           ...item,
@@ -248,6 +412,7 @@ export function App() {
           withdrawalAmount,
           totalReturn,
           profitLoss,
+          currentBalance,
           roi: depositAmount > 0 ? (profitLoss / depositAmount) * 100 : 0,
           proofCount: item.proofCount + (proofFile ? 1 : 0),
           cycles: [...item.cycles, cycle],
@@ -370,23 +535,26 @@ export function App() {
     operations: (
       <OperationsPage
         bettingHouses={bettingHouses}
-        operations={appOperations}
+        operations={visibleOperations}
         selectedOperation={selectedOperation}
         setSelectedOperationId={setSelectedOperationId}
         onCreateOperation={createOperation}
         onAddCycle={addCycle}
+        onUpdateOperationStatus={updateOperationStatus}
       />
     ),
-    houses: <HousesPage bettingHouses={bettingHouses} onCreateHouse={createHouse} />,
-    operators: <OperatorsPage invites={invites} onInvite={createInvite} />,
-    goals: <GoalsPage goals={goals} onCreateGoal={createGoal} />,
-    reports: <ReportsPage metrics={metrics} bettingHouses={bettingHouses} />,
+    houses: <HousesPage bettingHouses={bettingHouses} onCreateHouse={createHouse} onUpdateHouse={updateHouse} />,
+    operators: <OperatorsPage invites={invites} operators={operators} operations={appOperations} onInvite={createInvite} onUpdateOperatorStatus={updateOperatorStatus} />,
+    goals: <GoalsPage goals={goals} onCreateGoal={createGoal} onUpdateGoalStatus={updateGoalStatus} />,
+    reports: <ReportsPage metrics={metrics} bettingHouses={bettingHouses} operations={visibleOperations} />,
     settings: <SettingsPage themeMode={themeMode} setThemeMode={setThemeMode} />,
+    audit: activeUser.role === 'controller' ? <AuditPage auditLogs={auditLogs} /> : <DashboardPage metrics={metrics} bettingHouses={bettingHouses} />,
   };
 
   return (
     <AppShell
       activeUser={activeUser}
+      auditLogs={auditLogs}
       demoMode={demoMode}
       onLogout={logout}
       onNavigate={setPage}
