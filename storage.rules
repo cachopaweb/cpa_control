@@ -1,0 +1,34 @@
+rules_version = '2';
+
+service firebase.storage {
+  match /b/{bucket}/o {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function profile() {
+      return firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function isActive() {
+      return signedIn() && profile().status == 'active';
+    }
+
+    function isController() {
+      return isActive() && profile().role == 'controller';
+    }
+
+    function sameOrg(organizationId) {
+      return isActive() && profile().organizationId == organizationId;
+    }
+
+    match /cycle-proofs/{organizationId}/{operatorId}/{operationId}/{cycleId}/{fileName} {
+      allow read: if sameOrg(organizationId)
+        && (isController() || request.auth.uid == operatorId);
+      allow write: if sameOrg(organizationId)
+        && request.auth.uid == operatorId
+        && request.resource.size < 10 * 1024 * 1024
+        && request.resource.contentType.matches('image/.*');
+    }
+  }
+}

@@ -1,0 +1,136 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function userPath() {
+      return /databases/$(database)/documents/users/$(request.auth.uid);
+    }
+
+    function profile() {
+      return get(userPath()).data;
+    }
+
+    function hasProfile() {
+      return signedIn() && exists(userPath());
+    }
+
+    function isActive() {
+      return hasProfile() && profile().status == 'active';
+    }
+
+    function isController() {
+      return isActive() && profile().role == 'controller';
+    }
+
+    function isOperator() {
+      return isActive() && profile().role == 'operator';
+    }
+
+    function sameOrg(organizationId) {
+      return isActive() && profile().organizationId == organizationId;
+    }
+
+    function sameOrgResource() {
+      return sameOrg(resource.data.organizationId);
+    }
+
+    function sameOrgRequest() {
+      return sameOrg(request.resource.data.organizationId);
+    }
+
+    match /organizations/{organizationId} {
+      allow read: if sameOrg(organizationId);
+      allow create: if signedIn()
+        && request.resource.data.ownerUserId == request.auth.uid;
+      allow update: if isController() && sameOrg(organizationId);
+      allow delete: if false;
+    }
+
+    match /users/{userId} {
+      allow read: if signedIn() && (
+        userId == request.auth.uid ||
+        (isController() && sameOrgResource())
+      );
+
+      allow create: if signedIn() && (
+        userId == request.auth.uid ||
+        (isController() && sameOrgRequest())
+      );
+
+      allow update: if signedIn() && (
+        (userId == request.auth.uid
+          && resource.data.organizationId == request.resource.data.organizationId
+          && resource.data.role == request.resource.data.role
+          && resource.data.status == request.resource.data.status) ||
+        (isController() && sameOrgResource() && sameOrgRequest())
+      );
+
+      allow delete: if false;
+    }
+
+    match /invites/{inviteId} {
+      allow read: if isController() && sameOrgResource();
+      allow create: if isController()
+        && sameOrgRequest()
+        && request.resource.data.status == 'pending';
+      allow update: if isController() && sameOrgResource() && sameOrgRequest();
+      allow delete: if false;
+    }
+
+    match /bettingHouses/{houseId} {
+      allow read: if sameOrgResource();
+      allow create: if isController() && sameOrgRequest();
+      allow update: if isController() && sameOrgResource() && sameOrgRequest();
+      allow delete: if false;
+    }
+
+    match /operations/{operationId} {
+      allow read: if sameOrgResource()
+        && (isController() || resource.data.operatorId == request.auth.uid);
+      allow create: if sameOrgRequest()
+        && (isController() || request.resource.data.operatorId == request.auth.uid);
+      allow update: if sameOrgResource()
+        && sameOrgRequest()
+        && (isController() || resource.data.operatorId == request.auth.uid);
+      allow delete: if false;
+    }
+
+    match /cycles/{cycleId} {
+      allow read: if sameOrgResource()
+        && (isController() || resource.data.operatorId == request.auth.uid);
+      allow create: if sameOrgRequest()
+        && request.resource.data.operatorId == request.auth.uid;
+      allow update: if sameOrgResource()
+        && sameOrgRequest()
+        && (isController() || resource.data.operatorId == request.auth.uid);
+      allow delete: if false;
+    }
+
+    match /cycleProofs/{proofId} {
+      allow read: if sameOrgResource()
+        && (isController() || resource.data.operatorId == request.auth.uid);
+      allow create: if sameOrgRequest()
+        && request.resource.data.uploadedBy == request.auth.uid
+        && request.resource.data.operatorId == request.auth.uid;
+      allow update, delete: if false;
+    }
+
+    match /goals/{goalId} {
+      allow read: if sameOrgResource()
+        && (isController() || resource.data.operatorId == request.auth.uid || resource.data.scope == 'organization');
+      allow create: if isController() && sameOrgRequest();
+      allow update: if isController() && sameOrgResource() && sameOrgRequest();
+      allow delete: if false;
+    }
+
+    match /auditLogs/{auditLogId} {
+      allow read: if isController() && sameOrgResource();
+      allow create: if sameOrgRequest();
+      allow update, delete: if false;
+    }
+  }
+}
