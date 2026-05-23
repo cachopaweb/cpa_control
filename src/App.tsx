@@ -534,11 +534,14 @@ export function App() {
     setAuthError('');
 
     try {
-      await acceptInviteWithGoogle({ inviteId: inviteIdValue });
+      const profile = await acceptInviteWithGoogle({ inviteId: inviteIdValue });
       window.history.replaceState({}, '', '/');
+      setAuthSession({ uid: profile.id, email: profile.email });
+      setAuthProfile(profile);
       setDemoMode(false);
     } catch (error) {
-      setAuthError(error instanceof Error ? error.message : 'Não foi possível aceitar o convite.');
+      setAuthError(error instanceof Error ? error.message : 'Nao foi possivel aceitar o convite.');
+    } finally {
       setAuthLoading(false);
     }
   }

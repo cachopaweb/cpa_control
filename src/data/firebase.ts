@@ -174,6 +174,15 @@ export async function acceptInviteWithGoogle({ inviteId }: { inviteId: string })
       acceptedBy: googleUser.uid,
     });
     await batch.commit();
+
+    return {
+      id: googleUser.uid,
+      organizationId: invite.organizationId,
+      name: googleUser.name,
+      email: googleUser.email,
+      role: invite.role ?? 'operator',
+      status: 'active',
+    } satisfies UserProfile;
   }
 }
 
