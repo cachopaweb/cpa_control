@@ -92,13 +92,15 @@ export async function subscribeToAuthProfile(
 
 export async function getBootstrapStatus() {
   const services = await getFirebaseServices();
-  if (!services) return { hasFirstAdmin: false };
+  if (!services) return { hasFirstAdmin: false, controllerUserId: null };
 
   const { db, firestoreModule } = services;
   const bootstrapSnap = await firestoreModule.getDoc(firestoreModule.doc(db, 'system', 'bootstrap'));
+  const bootstrapData = bootstrapSnap.data();
 
   return {
-    hasFirstAdmin: bootstrapSnap.exists() && bootstrapSnap.data().hasFirstAdmin === true,
+    hasFirstAdmin: bootstrapSnap.exists() && bootstrapData?.hasFirstAdmin === true,
+    controllerUserId: typeof bootstrapData?.controllerUserId === 'string' ? bootstrapData.controllerUserId : null,
   };
 }
 
@@ -201,12 +203,13 @@ export async function createFirstAdminProfile({ organizationName, themeMode }: {
   const googleUser = await signInWithGoogle();
   const bootstrapRef = firestoreModule.doc(db, 'system', 'bootstrap');
   const bootstrapSnap = await firestoreModule.getDoc(bootstrapRef);
+  const bootstrapData = bootstrapSnap.data();
 
-  if (bootstrapSnap.exists() && bootstrapSnap.data().hasFirstAdmin === true) {
+  if (bootstrapSnap.exists() && bootstrapData?.hasFirstAdmin === true && bootstrapData.controllerUserId !== googleUser.uid) {
     throw new Error('O primeiro admin ja foi cadastrado.');
   }
 
-  const organizationId = `org-${googleUser.uid}`;
+  const organizationId = typeof bootstrapData?.organizationId === 'string' ? bootstrapData.organizationId : `org-${googleUser.uid}`;
   const batch = firestoreModule.writeBatch(db);
 
   batch.set(firestoreModule.doc(db, 'organizations', organizationId), {
@@ -228,12 +231,14 @@ export async function createFirstAdminProfile({ organizationName, themeMode }: {
     createdBy: googleUser.uid,
     settings: { themeMode },
   });
-  batch.set(bootstrapRef, {
-    hasFirstAdmin: true,
-    organizationId,
-    controllerUserId: googleUser.uid,
-    createdAt: firestoreModule.serverTimestamp(),
-  });
+  if (!bootstrapSnap.exists()) {
+    batch.set(bootstrapRef, {
+      hasFirstAdmin: true,
+      organizationId,
+      controllerUserId: googleUser.uid,
+      createdAt: firestoreModule.serverTimestamp(),
+    });
+  }
 
   await batch.commit();
 

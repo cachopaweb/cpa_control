@@ -216,6 +216,7 @@ export function App() {
 
   const activeUser = authProfile ?? currentUser;
   const canUseApp = demoMode || Boolean(authSession && authProfile?.status === 'active');
+  const canCreateFirstAdmin = hasFirstAdmin === false || Boolean(authSession && !authProfile);
 
   useEffect(() => {
     if (!canAccessPage(activeUser.role, page)) {
@@ -580,7 +581,7 @@ export function App() {
       <AuthScreen
         loading={authLoading}
         error={authError}
-        hasFirstAdmin={hasFirstAdmin !== false}
+        hasFirstAdmin={!canCreateFirstAdmin}
         onLogin={login}
         onCreateFirstAdmin={createFirstAdmin}
         onDemo={() => {

@@ -80,6 +80,12 @@ service cloud.firestore {
             && request.resource.data.role == 'controller'
             && request.resource.data.status == 'active'
             && request.resource.data.createdBy == request.auth.uid) ||
+          (exists(/databases/$(database)/documents/system/bootstrap)
+            && get(/databases/$(database)/documents/system/bootstrap).data.controllerUserId == request.auth.uid
+            && request.resource.data.role == 'controller'
+            && request.resource.data.status == 'active'
+            && request.resource.data.createdBy == request.auth.uid
+            && request.resource.data.organizationId == get(/databases/$(database)/documents/system/bootstrap).data.organizationId) ||
           (request.resource.data.role == 'operator'
             && request.resource.data.status == 'active'
             && request.resource.data.acceptedInviteId is string
