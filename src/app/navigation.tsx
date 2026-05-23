@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import { BarChart3, Building2, CalendarDays, ClipboardList, LayoutDashboard, Settings, Target, Users } from 'lucide-react';
+import type { Role } from '../data/types';
 
 export type Page = 'dashboard' | 'operations' | 'houses' | 'operators' | 'goals' | 'reports' | 'audit' | 'settings';
 
@@ -13,6 +14,16 @@ export const navItems: Array<{ page: Page; label: string; icon: ReactNode }> = [
   { page: 'audit', label: 'Auditoria', icon: <ClipboardList size={18} /> },
   { page: 'settings', label: 'Configurações', icon: <Settings size={18} /> },
 ];
+
+const operatorPages = new Set<Page>(['dashboard', 'operations', 'houses', 'reports', 'settings']);
+
+export function canAccessPage(role: Role, page: Page) {
+  return role === 'controller' || operatorPages.has(page);
+}
+
+export function getNavItemsForRole(role: Role) {
+  return navItems.filter((item) => canAccessPage(role, item.page));
+}
 
 export const pageTitles: Record<Page, string> = {
   dashboard: 'Dashboard',

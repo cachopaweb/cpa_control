@@ -2,7 +2,7 @@ import { Bell, Moon, Sun } from 'lucide-react';
 import { useMemo, useState, type ReactNode } from 'react';
 import type { AuditLog, ThemeMode, UserProfile } from '../data/types';
 import { isFirebaseConfigured } from '../data/firebase';
-import { navItems, pageDescriptions, pageTitles, type Page } from '../app/navigation';
+import { getNavItemsForRole, pageDescriptions, pageTitles, type Page } from '../app/navigation';
 import { resolveTheme } from '../app/theme';
 
 export function AppShell({
@@ -29,6 +29,7 @@ export function AppShell({
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [seenCount, setSeenCount] = useState(auditLogs.length);
   const latestNotifications = useMemo(() => auditLogs.slice(0, 6), [auditLogs]);
+  const availableNavItems = useMemo(() => getNavItemsForRole(activeUser.role), [activeUser.role]);
   const unreadCount = Math.max(auditLogs.length - seenCount, 0);
 
   function toggleNotifications() {
@@ -48,8 +49,8 @@ export function AppShell({
         </div>
 
         <nav className="nav-list" aria-label="Navegação principal">
-          {navItems.map((item) => (
-            activeUser.role === 'operator' && item.page === 'audit' ? null : <button key={item.page} className={page === item.page ? 'nav-item active' : 'nav-item'} onClick={() => onNavigate(item.page)} aria-current={page === item.page ? 'page' : undefined}>
+          {availableNavItems.map((item) => (
+            <button key={item.page} className={page === item.page ? 'nav-item active' : 'nav-item'} onClick={() => onNavigate(item.page)} aria-current={page === item.page ? 'page' : undefined}>
               {item.icon}
               <span>{item.label}</span>
             </button>

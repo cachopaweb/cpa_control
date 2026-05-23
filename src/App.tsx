@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import type { Page } from './app/navigation';
+import { canAccessPage, type Page } from './app/navigation';
 import { resolveTheme, subscribeToSystemTheme } from './app/theme';
 import { auditLogs as initialAuditLogs, currentUser, goals as initialGoals, houses, invites as initialInvites, operations as initialOperations, operators as initialOperators } from './data/mockData';
 import type { AuditLog, BettingHouse, Cycle, DashboardMetrics, Goal, Invite, Operation, ThemeMode, UserProfile } from './data/types';
@@ -216,6 +216,13 @@ export function App() {
 
   const activeUser = authProfile ?? currentUser;
   const canUseApp = demoMode || Boolean(authSession && authProfile?.status === 'active');
+
+  useEffect(() => {
+    if (!canAccessPage(activeUser.role, page)) {
+      setPage('dashboard');
+    }
+  }, [activeUser.role, page]);
+
   const operators = useMemo(() => users.filter((user) => user.role === 'operator'), [users]);
   const visibleOperations = useMemo(
     () => (activeUser.role === 'controller' ? appOperations : appOperations.filter((operation) => operation.operatorId === activeUser.id)),
