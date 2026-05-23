@@ -4,15 +4,15 @@ import { resolveTheme, subscribeToSystemTheme } from './app/theme';
 import { auditLogs as initialAuditLogs, currentUser, goals as initialGoals, houses, invites as initialInvites, operations as initialOperations, operators as initialOperators } from './data/mockData';
 import type { AuditLog, BettingHouse, Cycle, DashboardMetrics, Goal, Invite, Operation, ThemeMode, UserProfile } from './data/types';
 import {
-  acceptInviteWithPassword,
+  acceptInviteWithGoogle,
   createBettingHouseDocument,
   createCycleDocument,
   createFirstAdminProfile,
   createGoalDocument,
   createInviteDocument,
   createOperationDocument,
+  getBootstrapStatus,
   isFirebaseConfigured,
-  loginWithEmail,
   loginWithGoogle,
   logoutFromFirebase,
   subscribeOrganizationLists,
@@ -44,18 +44,44 @@ function getInitialTheme(): ThemeMode {
   return getStoredThemeMode();
 }
 
+function parseLocalDate(date: string) {
+  const [year, month, day] = date.split('-').map(Number);
+  return new Date(year, month - 1, day);
+}
+
+function isSameDay(left: Date, right: Date) {
+  return left.getFullYear() === right.getFullYear() && left.getMonth() === right.getMonth() && left.getDate() === right.getDate();
+}
+
+function isSameMonth(left: Date, right: Date) {
+  return left.getFullYear() === right.getFullYear() && left.getMonth() === right.getMonth();
+}
+
+function getWeekStart(date: Date) {
+  const weekStart = new Date(date);
+  weekStart.setHours(0, 0, 0, 0);
+  weekStart.setDate(date.getDate() - date.getDay());
+  return weekStart;
+}
+
 function calculateMetrics(appOperations: Operation[], bettingHouses: BettingHouse[]): DashboardMetrics {
   let dailyProfit = 0;
-  let monthlyProfit = 43163;
+  let weeklyProfit = 0;
+  let monthlyProfit = 0;
   let totalDeposit = 0;
   let totalReturn = 0;
   let activeOperations = 0;
   let activeHouses = 0;
+  const today = new Date();
+  const weekStart = getWeekStart(today);
 
   for (const operation of appOperations) {
-    if (operation.date === '2026-05-21') dailyProfit += operation.profitLoss;
+    const operationDate = parseLocalDate(operation.date);
+
+    if (isSameDay(operationDate, today)) dailyProfit += operation.profitLoss;
+    if (operationDate >= weekStart && operationDate <= today) weeklyProfit += operation.profitLoss;
+    if (isSameMonth(operationDate, today)) monthlyProfit += operation.profitLoss;
     if (operation.status === 'open') activeOperations += 1;
-    monthlyProfit += operation.profitLoss;
     totalDeposit += operation.depositAmount;
     totalReturn += operation.totalReturn;
   }
@@ -66,7 +92,7 @@ function calculateMetrics(appOperations: Operation[], bettingHouses: BettingHous
 
   return {
     dailyProfit,
-    weeklyProfit: 13730,
+    weeklyProfit,
     monthlyProfit,
     totalDeposit,
     totalReturn,
@@ -74,6 +100,38 @@ function calculateMetrics(appOperations: Operation[], bettingHouses: BettingHous
     activeHouses,
     activeOperations,
   };
+}
+
+function mergeHouseOperationStats(bettingHouses: BettingHouse[], appOperations: Operation[]): BettingHouse[] {
+  const statsByHouse = new Map<string, Pick<BettingHouse, 'activeOperations' | 'deposit' | 'returns' | 'profit' | 'roi'>>();
+
+  for (const operation of appOperations) {
+    const current = statsByHouse.get(operation.bettingHouseId) ?? {
+      activeOperations: 0,
+      deposit: 0,
+      returns: 0,
+      profit: 0,
+      roi: 0,
+    };
+
+    if (operation.status === 'open') current.activeOperations += 1;
+    current.deposit += operation.depositAmount;
+    current.returns += operation.totalReturn;
+    current.profit += operation.profitLoss;
+    current.roi = current.deposit > 0 ? (current.profit / current.deposit) * 100 : 0;
+    statsByHouse.set(operation.bettingHouseId, current);
+  }
+
+  return bettingHouses.map((house) => ({
+    ...house,
+    ...(statsByHouse.get(house.id) ?? {
+      activeOperations: 0,
+      deposit: 0,
+      returns: 0,
+      profit: 0,
+      roi: 0,
+    }),
+  }));
 }
 
 export function App() {
@@ -91,6 +149,7 @@ export function App() {
   const [authLoading, setAuthLoading] = useState(isFirebaseConfigured);
   const [authError, setAuthError] = useState('');
   const [demoMode, setDemoMode] = useState(!isFirebaseConfigured);
+  const [hasFirstAdmin, setHasFirstAdmin] = useState<boolean | null>(isFirebaseConfigured ? null : false);
 
   useEffect(() => {
     setStoredThemeMode(themeMode);
@@ -110,6 +169,14 @@ export function App() {
 
     let unsubscribe: (() => void) | undefined;
     let active = true;
+
+    void getBootstrapStatus()
+      .then((status) => {
+        if (active) setHasFirstAdmin(status.hasFirstAdmin);
+      })
+      .catch(() => {
+        if (active) setHasFirstAdmin(false);
+      });
 
     void subscribeToAuthProfile((session, profile, error) => {
       if (!active) return;
@@ -154,7 +221,8 @@ export function App() {
     () => (activeUser.role === 'controller' ? appOperations : appOperations.filter((operation) => operation.operatorId === activeUser.id)),
     [activeUser.id, activeUser.role, appOperations],
   );
-  const metrics = useMemo(() => calculateMetrics(visibleOperations, bettingHouses), [visibleOperations, bettingHouses]);
+  const visibleBettingHouses = useMemo(() => mergeHouseOperationStats(bettingHouses, visibleOperations), [bettingHouses, visibleOperations]);
+  const metrics = useMemo(() => calculateMetrics(visibleOperations, visibleBettingHouses), [visibleOperations, visibleBettingHouses]);
   const selectedOperation = visibleOperations.find((operation) => operation.id === selectedOperationId) ?? visibleOperations[0];
   const inviteId = useMemo(() => new URLSearchParams(window.location.search).get('invite'), []);
   const isAcceptInviteRoute = window.location.pathname === '/accept-invite';
@@ -421,25 +489,7 @@ export function App() {
     );
   }
 
-  async function login(email: string, password: string) {
-    if (!isFirebaseConfigured) {
-      setDemoMode(true);
-      return;
-    }
-
-    setAuthLoading(true);
-    setAuthError('');
-
-    try {
-      await loginWithEmail(email, password);
-      setDemoMode(false);
-    } catch (error) {
-      setAuthError(error instanceof Error ? error.message : 'Não foi possível entrar.');
-      setAuthLoading(false);
-    }
-  }
-
-  async function loginGoogle() {
+  async function login() {
     if (!isFirebaseConfigured) {
       setDemoMode(true);
       return;
@@ -452,19 +502,20 @@ export function App() {
       await loginWithGoogle();
       setDemoMode(false);
     } catch (error) {
-      setAuthError(error instanceof Error ? error.message : 'Não foi possível entrar com Google.');
+      setAuthError(error instanceof Error ? error.message : 'Não foi possível entrar.');
       setAuthLoading(false);
     }
   }
 
-  async function createFirstAdmin(name: string, organizationName: string, email: string, password: string) {
+  async function createFirstAdmin(organizationName: string) {
     setAuthLoading(true);
     setAuthError('');
 
     try {
-      const profile = await createFirstAdminProfile({ name, organizationName, email, password, themeMode });
-      setAuthSession({ uid: profile.id, email });
+      const profile = await createFirstAdminProfile({ organizationName, themeMode });
+      setAuthSession({ uid: profile.id, email: profile.email });
       setAuthProfile(profile);
+      setHasFirstAdmin(true);
       setDemoMode(false);
     } catch (error) {
       setAuthError(error instanceof Error ? error.message : 'Não foi possível criar o admin.');
@@ -473,7 +524,7 @@ export function App() {
     }
   }
 
-  async function acceptInvite(inviteIdValue: string, name: string, email: string, password: string) {
+  async function acceptInvite(inviteIdValue: string) {
     if (!isFirebaseConfigured) {
       setAuthError('Configure o Firebase para aceitar convites reais.');
       return;
@@ -483,7 +534,7 @@ export function App() {
     setAuthError('');
 
     try {
-      await acceptInviteWithPassword({ inviteId: inviteIdValue, name, email, password });
+      await acceptInviteWithGoogle({ inviteId: inviteIdValue });
       window.history.replaceState({}, '', '/');
       setDemoMode(false);
     } catch (error) {
@@ -519,8 +570,8 @@ export function App() {
       <AuthScreen
         loading={authLoading}
         error={authError}
+        hasFirstAdmin={hasFirstAdmin !== false}
         onLogin={login}
-        onGoogleLogin={loginGoogle}
         onCreateFirstAdmin={createFirstAdmin}
         onDemo={() => {
           setAuthError('');
@@ -531,10 +582,10 @@ export function App() {
   }
 
   const pages: Record<Page, ReactNode> = {
-    dashboard: <DashboardPage metrics={metrics} bettingHouses={bettingHouses} />,
+    dashboard: <DashboardPage metrics={metrics} bettingHouses={visibleBettingHouses} />,
     operations: (
       <OperationsPage
-        bettingHouses={bettingHouses}
+        bettingHouses={visibleBettingHouses}
         operations={visibleOperations}
         selectedOperation={selectedOperation}
         setSelectedOperationId={setSelectedOperationId}
@@ -543,12 +594,12 @@ export function App() {
         onUpdateOperationStatus={updateOperationStatus}
       />
     ),
-    houses: <HousesPage bettingHouses={bettingHouses} onCreateHouse={createHouse} onUpdateHouse={updateHouse} />,
+    houses: <HousesPage bettingHouses={visibleBettingHouses} onCreateHouse={createHouse} onUpdateHouse={updateHouse} />,
     operators: <OperatorsPage invites={invites} operators={operators} operations={appOperations} onInvite={createInvite} onUpdateOperatorStatus={updateOperatorStatus} />,
     goals: <GoalsPage goals={goals} onCreateGoal={createGoal} onUpdateGoalStatus={updateGoalStatus} />,
-    reports: <ReportsPage metrics={metrics} bettingHouses={bettingHouses} operations={visibleOperations} />,
+    reports: <ReportsPage metrics={metrics} bettingHouses={visibleBettingHouses} operations={visibleOperations} />,
     settings: <SettingsPage themeMode={themeMode} setThemeMode={setThemeMode} />,
-    audit: activeUser.role === 'controller' ? <AuditPage auditLogs={auditLogs} /> : <DashboardPage metrics={metrics} bettingHouses={bettingHouses} />,
+    audit: activeUser.role === 'controller' ? <AuditPage auditLogs={auditLogs} /> : <DashboardPage metrics={metrics} bettingHouses={visibleBettingHouses} />,
   };
 
   return (

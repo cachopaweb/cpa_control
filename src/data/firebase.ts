@@ -28,6 +28,12 @@ export type AuthSession = {
   email: string | null;
 };
 
+export type SocialAuthUser = {
+  uid: string;
+  email: string;
+  name: string;
+};
+
 let servicesPromise: Promise<FirebaseServices | null> | null = null;
 
 export function getFirebaseServices() {
@@ -84,41 +90,51 @@ export async function subscribeToAuthProfile(
   });
 }
 
-export async function loginWithEmail(email: string, password: string) {
+export async function getBootstrapStatus() {
   const services = await getFirebaseServices();
-  if (!services) return;
+  if (!services) return { hasFirstAdmin: false };
 
-  await services.authModule.signInWithEmailAndPassword(services.auth, email, password);
+  const { db, firestoreModule } = services;
+  const bootstrapSnap = await firestoreModule.getDoc(firestoreModule.doc(db, 'system', 'bootstrap'));
+
+  return {
+    hasFirstAdmin: bootstrapSnap.exists() && bootstrapSnap.data().hasFirstAdmin === true,
+  };
 }
 
 export async function loginWithGoogle() {
+  await signInWithGoogle();
+}
+
+async function signInWithGoogle(): Promise<SocialAuthUser> {
   const services = await getFirebaseServices();
-  if (!services) return;
+  if (!services) throw new Error('Firebase nÃ£o estÃ¡ configurado.');
 
   const provider = new services.authModule.GoogleAuthProvider();
   provider.setCustomParameters({ prompt: 'select_account' });
-  await services.authModule.signInWithPopup(services.auth, provider);
+  const credential = await services.authModule.signInWithPopup(services.auth, provider);
+  const email = credential.user.email;
+
+  if (!email) {
+    throw new Error('A conta Google precisa ter email verificado.');
+  }
+
+  return {
+    uid: credential.user.uid,
+    email,
+    name: credential.user.displayName ?? email.split('@')[0] ?? 'Admin CPA',
+  };
 }
 
-export async function acceptInviteWithPassword({
-  inviteId,
-  name,
-  email,
-  password,
-}: {
-  inviteId: string;
-  name: string;
-  email: string;
-  password: string;
-}) {
+export async function acceptInviteWithGoogle({ inviteId }: { inviteId: string }) {
   const services = await getFirebaseServices();
   if (!services) throw new Error('Firebase não está configurado.');
 
-  const { auth, authModule, db, firestoreModule } = services;
-  const credential = await authModule.createUserWithEmailAndPassword(auth, email, password);
+  const { db, firestoreModule } = services;
+  const googleUser = await signInWithGoogle();
   const inviteRef = firestoreModule.doc(db, 'invites', inviteId);
 
-  try {
+  {
     const inviteSnap = await firestoreModule.getDoc(inviteRef);
 
     if (!inviteSnap.exists()) {
@@ -132,8 +148,8 @@ export async function acceptInviteWithPassword({
       throw new Error('Este convite não está mais disponível.');
     }
 
-    if (invite.email !== email) {
-      throw new Error('Use o mesmo email que recebeu o convite.');
+    if (invite.email !== googleUser.email) {
+      throw new Error('Use a conta Google do mesmo email que recebeu o convite.');
     }
 
     if (expiresAt && expiresAt.getTime() < Date.now()) {
@@ -141,10 +157,10 @@ export async function acceptInviteWithPassword({
     }
 
     const batch = firestoreModule.writeBatch(db);
-    batch.set(firestoreModule.doc(db, 'users', credential.user.uid), {
+    batch.set(firestoreModule.doc(db, 'users', googleUser.uid), {
       organizationId: invite.organizationId,
-      name,
-      email,
+      name: googleUser.name,
+      email: googleUser.email,
       role: invite.role ?? 'operator',
       status: 'active',
       createdAt: firestoreModule.serverTimestamp(),
@@ -155,12 +171,9 @@ export async function acceptInviteWithPassword({
     batch.update(inviteRef, {
       status: 'accepted',
       acceptedAt: firestoreModule.serverTimestamp(),
-      acceptedBy: credential.user.uid,
+      acceptedBy: googleUser.uid,
     });
     await batch.commit();
-  } catch (error) {
-    await authModule.deleteUser(credential.user).catch(() => undefined);
-    throw error;
   }
 }
 
@@ -171,53 +184,55 @@ export async function logoutFromFirebase() {
   await services.authModule.signOut(services.auth);
 }
 
-export async function createFirstAdminProfile({
-  name,
-  organizationName,
-  email,
-  password,
-  themeMode,
-}: {
-  name: string;
-  organizationName: string;
-  email: string;
-  password: string;
-  themeMode: ThemeMode;
-}) {
+export async function createFirstAdminProfile({ organizationName, themeMode }: { organizationName: string; themeMode: ThemeMode }) {
   const services = await getFirebaseServices();
   if (!services) throw new Error('Firebase não está configurado.');
 
-  const { auth, authModule, db, firestoreModule } = services;
-  const credential = await authModule.createUserWithEmailAndPassword(auth, email, password);
-  const organizationId = `org-${credential.user.uid}`;
+  const { db, firestoreModule } = services;
+  const googleUser = await signInWithGoogle();
+  const bootstrapRef = firestoreModule.doc(db, 'system', 'bootstrap');
+  const bootstrapSnap = await firestoreModule.getDoc(bootstrapRef);
 
-  await Promise.all([
-    firestoreModule.setDoc(firestoreModule.doc(db, 'organizations', organizationId), {
-      name: organizationName,
-      status: 'trialing',
-      plan: 'starter',
-      ownerUserId: credential.user.uid,
-      createdAt: firestoreModule.serverTimestamp(),
-      updatedAt: firestoreModule.serverTimestamp(),
-    }),
-    firestoreModule.setDoc(firestoreModule.doc(db, 'users', credential.user.uid), {
-      organizationId,
-      name,
-      email,
-      role: 'controller',
-      status: 'active',
-      createdAt: firestoreModule.serverTimestamp(),
-      updatedAt: firestoreModule.serverTimestamp(),
-      createdBy: credential.user.uid,
-      settings: { themeMode },
-    }),
-  ]);
+  if (bootstrapSnap.exists() && bootstrapSnap.data().hasFirstAdmin === true) {
+    throw new Error('O primeiro admin ja foi cadastrado.');
+  }
+
+  const organizationId = `org-${googleUser.uid}`;
+  const batch = firestoreModule.writeBatch(db);
+
+  batch.set(firestoreModule.doc(db, 'organizations', organizationId), {
+    name: organizationName,
+    status: 'trialing',
+    plan: 'starter',
+    ownerUserId: googleUser.uid,
+    createdAt: firestoreModule.serverTimestamp(),
+    updatedAt: firestoreModule.serverTimestamp(),
+  });
+  batch.set(firestoreModule.doc(db, 'users', googleUser.uid), {
+    organizationId,
+    name: googleUser.name,
+    email: googleUser.email,
+    role: 'controller',
+    status: 'active',
+    createdAt: firestoreModule.serverTimestamp(),
+    updatedAt: firestoreModule.serverTimestamp(),
+    createdBy: googleUser.uid,
+    settings: { themeMode },
+  });
+  batch.set(bootstrapRef, {
+    hasFirstAdmin: true,
+    organizationId,
+    controllerUserId: googleUser.uid,
+    createdAt: firestoreModule.serverTimestamp(),
+  });
+
+  await batch.commit();
 
   return {
-    id: credential.user.uid,
+    id: googleUser.uid,
     organizationId,
-    name,
-    email,
+    name: googleUser.name,
+    email: googleUser.email,
     role: 'controller',
     status: 'active',
   } satisfies UserProfile;

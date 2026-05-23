@@ -962,24 +962,22 @@ dd {
   font-size: 13px;
 }
 
-.auth-tabs {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
-  margin: 20px 0;
+.auth-heading {
+  margin: 14px 0 20px;
+  padding-top: 18px;
+  border-top: 1px solid var(--border);
 }
 
-.auth-tabs button {
-  min-height: 42px;
+.auth-heading h1 {
+  margin: 0;
+  font-size: 24px;
+  letter-spacing: 0;
+}
+
+.auth-heading p {
+  margin: 6px 0 0;
   color: var(--muted);
-  background: var(--panel-strong);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-}
-
-.auth-tabs button.active {
-  color: var(--text);
-  border-color: var(--brand);
+  font-size: 14px;
 }
 
 .auth-form {
@@ -998,6 +996,26 @@ dd {
   background: var(--panel-strong);
   border: 1px solid var(--border);
   border-radius: 8px;
+}
+
+.demo-button {
+  min-height: 42px;
+}
+
+.auth-secondary {
+  display: flex;
+  justify-content: center;
+}
+
+.auth-secondary button {
+  color: var(--muted);
+  background: transparent;
+  border: 0;
+  font-weight: 700;
+}
+
+.auth-secondary button:hover {
+  color: var(--text);
 }
 
 .auth-error {

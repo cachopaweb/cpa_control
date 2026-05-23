@@ -3,23 +3,34 @@ import { useState, type FormEvent } from 'react';
 export function AuthScreen({
   loading,
   error,
+  hasFirstAdmin,
   onLogin,
-  onGoogleLogin,
   onCreateFirstAdmin,
   onDemo,
 }: {
   loading: boolean;
   error: string;
-  onLogin: (email: string, password: string) => Promise<void>;
-  onGoogleLogin: () => Promise<void>;
-  onCreateFirstAdmin: (name: string, organizationName: string, email: string, password: string) => Promise<void>;
+  hasFirstAdmin: boolean;
+  onLogin: () => Promise<void>;
+  onCreateFirstAdmin: (organizationName: string) => Promise<void>;
   onDemo: () => void;
 }) {
-  const [mode, setMode] = useState<'login' | 'admin'>('login');
-  const [name, setName] = useState('Admin CPA');
-  const [organizationName, setOrganizationName] = useState('Minha operação CPA');
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
+  const [isCreatingAdmin, setIsCreatingAdmin] = useState(false);
+  const [organizationName, setOrganizationName] = useState('Minha operacao CPA');
+  const [localError, setLocalError] = useState('');
+  const trimmedOrganizationName = organizationName.trim();
+
+  function submitFirstAdmin(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (!trimmedOrganizationName) {
+      setLocalError('Informe o nome da organizacao.');
+      return;
+    }
+
+    setLocalError('');
+    void onCreateFirstAdmin(trimmedOrganizationName);
+  }
 
   return (
     <main className="auth-shell">
@@ -28,60 +39,53 @@ export function AuthScreen({
           <div className="brand-mark">C</div>
           <div>
             <strong>CPA Control</strong>
-            <span>MicroSaaS para casas de aposta</span>
+            <span>Controle de operacoes CPA</span>
           </div>
         </div>
 
-        <div className="auth-tabs">
-          <button className={mode === 'login' ? 'active' : ''} onClick={() => setMode('login')}>Entrar</button>
-          <button className={mode === 'admin' ? 'active' : ''} onClick={() => setMode('admin')}>Criar admin</button>
+        <div className="auth-heading">
+          <h1>{isCreatingAdmin ? 'Criar primeiro admin' : 'Entrar'}</h1>
+          <p>{isCreatingAdmin ? 'Use sua conta Google para iniciar a organizacao.' : 'Acesse usando sua conta Google cadastrada.'}</p>
         </div>
 
-        <form
-          className="auth-form"
-          onSubmit={(event: FormEvent<HTMLFormElement>) => {
-            event.preventDefault();
-            if (mode === 'login') {
-              void onLogin(email, password);
-              return;
-            }
-            void onCreateFirstAdmin(name, organizationName, email, password);
-          }}
-        >
-          {mode === 'admin' && (
-            <>
-              <label>
-                Nome do admin
-                <input value={name} onChange={(event) => setName(event.target.value)} />
-              </label>
-              <label>
-                Organização
-                <input value={organizationName} onChange={(event) => setOrganizationName(event.target.value)} />
-              </label>
-            </>
-          )}
-          <label>
-            Email
-            <input value={email} onChange={(event) => setEmail(event.target.value)} type="email" placeholder="admin@email.com" />
-          </label>
-          <label>
-            Senha
-            <input value={password} onChange={(event) => setPassword(event.target.value)} type="password" placeholder="mínimo 6 caracteres" />
-          </label>
+        {isCreatingAdmin ? (
+          <form className="auth-form" onSubmit={submitFirstAdmin}>
+            <label>
+              Organizacao
+              <input value={organizationName} onChange={(event) => setOrganizationName(event.target.value)} autoComplete="organization" />
+            </label>
 
-          {error && <p className="auth-error">{error}</p>}
+            {localError || error ? <p className="auth-error">{localError || error}</p> : null}
 
-          <button className="primary-button" type="submit" disabled={loading}>
-            {loading ? 'Aguarde...' : mode === 'login' ? 'Entrar com Firebase' : 'Criar primeiro admin'}
-          </button>
-          <button className="google-button" type="button" onClick={() => void onGoogleLogin()} disabled={loading}>
-            <span>G</span>
-            Entrar com Google
-          </button>
-          <button className="ghost-button" type="button" onClick={onDemo}>
-            Entrar em modo demonstração
-          </button>
-        </form>
+            <button className="google-button" type="submit" disabled={loading || !trimmedOrganizationName}>
+              <span>G</span>
+              {loading ? 'Aguarde...' : 'Criar admin com Google'}
+            </button>
+            <button className="ghost-button" type="button" onClick={() => setIsCreatingAdmin(false)} disabled={loading}>
+              Voltar
+            </button>
+          </form>
+        ) : (
+          <div className="auth-form">
+            {error ? <p className="auth-error">{error}</p> : null}
+
+            <button className="google-button" type="button" onClick={() => void onLogin()} disabled={loading}>
+              <span>G</span>
+              {loading ? 'Aguarde...' : 'Entrar com Google'}
+            </button>
+            <button className="ghost-button demo-button" type="button" onClick={onDemo} disabled={loading}>
+              Modo demonstracao
+            </button>
+
+            {!hasFirstAdmin ? (
+              <div className="auth-secondary">
+                <button type="button" onClick={() => setIsCreatingAdmin(true)} disabled={loading}>
+                  Criar primeiro admin
+                </button>
+              </div>
+            ) : null}
+          </div>
+        )}
       </section>
     </main>
   );
